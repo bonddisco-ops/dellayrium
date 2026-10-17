@@ -18,6 +18,7 @@ public:
     bool isFactory (const juce::String& name) const { return getFactoryNames().contains (name); }
     juce::String getCurrentName() const { return currentName; }
     bool isModified() const { return modified.load(); }
+    int loadCount() const { return loads.load(); }   // goes up every time a preset is loaded
 
     void loadInit();
     bool load (const juce::String& name);
@@ -36,6 +37,7 @@ private:
     juce::AudioProcessorValueTreeState& apvts;
     juce::String currentName { "Init" };
     std::atomic<bool> modified { false };
+    std::atomic<int> loads { 0 };
     std::atomic<juce::uint32> ignoreUntil { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PresetManager)

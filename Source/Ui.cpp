@@ -272,6 +272,39 @@ void Knob::paintOverChildren (Graphics& g)
 }
 
 //==============================================================================
+MiniParam::MiniParam()
+{
+    setSliderStyle (Slider::RotaryVerticalDrag);
+    setTextBoxStyle (Slider::NoTextBox, false, 0, 0);
+    setMouseDragSensitivity (180);
+    setMouseCursor (MouseCursor::UpDownResizeCursor);
+    onValueChange = [this] { repaint(); };
+}
+
+void MiniParam::paint (Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat().reduced (0.5f);
+    g.setColour (kWidget);
+    g.fillRoundedRectangle (r, 6.0f);
+    const float frac = (float) valueToProportionOfLength (getValue());
+    {
+        Graphics::ScopedSaveState ss (g);
+        g.reduceClipRegion (r.withWidth (r.getWidth() * frac).toNearestInt());
+        g.setColour (colour.withAlpha (isMouseOverOrDragging() ? 0.42f : 0.30f));
+        g.fillRoundedRectangle (r, 6.0f);
+    }
+    g.setColour (colour.withAlpha (0.55f));
+    g.drawRoundedRectangle (r, 6.0f, 1.0f);
+    auto t = getLocalBounds().reduced (3, 2);
+    g.setColour (kMute);
+    g.setFont (uiFont (9.5f, true, 0.6f));
+    g.drawText (name, t.removeFromTop (t.getHeight() / 2), Justification::centred);
+    g.setColour (kInk);
+    g.setFont (uiFont (11.5f));
+    g.drawText (getTextFromValue (getValue()), t, Justification::centred);
+}
+
+//==============================================================================
 Segmented::Segmented (StringArray i, bool boldCaps) : items (std::move (i)), caps (boldCaps)
 {
     setMouseCursor (MouseCursor::PointingHandCursor);
@@ -857,8 +890,7 @@ void Screen::mouseDown (const MouseEvent& e)
         dragging = sel;
         dragStart = e.position;
         grabOffset = nodePos (sel) - e.position;
-        for (auto* id : { Params::freq, Params::level })
-            if (auto* p = proc.apvts.getParameter (Params::id (sel, id))) p->beginChangeGesture();
+        touchedFreq = touchedLevel = false;
         repaint();
         return;
     }
@@ -891,8 +923,7 @@ void Screen::mouseDown (const MouseEvent& e)
     dragging = n;
     dragStart = e.position;
     grabOffset = nodePos (n) - e.position;
-    for (auto* id : { Params::freq, Params::level })
-        if (auto* p = proc.apvts.getParameter (Params::id (n, id))) p->beginChangeGesture();
+    touchedFreq = touchedLevel = false;
 }
 
 void Screen::mouseDrag (const MouseEvent& e)
@@ -909,16 +940,27 @@ void Screen::mouseDrag (const MouseEvent& e)
     pos += grabOffset;
     const float f = jlimit (20.0f, 20000.0f, fFor (jlimit (plot.getX(), plot.getRight(), pos.x)));
     const float lvl = jlimit (0.0f, 1.0f, (zeroY() - pos.y) / bellH());
-    setParam (dragging, Params::freq, f);
-    setParam (dragging, Params::level, lvl);
+    // A gesture starts only on the axis that actually moves, so the DAW's "last touched
+    // parameter" is Frequency when you drag sideways and Level when you drag up or down.
+    auto* pf = proc.apvts.getParameter (Params::id (dragging, Params::freq));
+    auto* pl = proc.apvts.getParameter (Params::id (dragging, Params::level));
+    const auto d = e.position - dragStart;
+    const bool moveF = std::abs (d.x) > 3.0f, moveL = std::abs (d.y) > 3.0f;
+    if (moveF && ! touchedFreq && pf != nullptr) { pf->beginChangeGesture(); touchedFreq = true; }
+    if (moveL && ! touchedLevel && pl != nullptr) { pl->beginChangeGesture(); touchedLevel = true; }
+    if (touchedFreq) setParam (dragging, Params::freq, f);
+    if (touchedLevel) setParam (dragging, Params::level, lvl);
     repaint();
 }
 
 void Screen::mouseUp (const MouseEvent&)
 {
     if (dragging >= 0)
-        for (auto* id : { Params::freq, Params::level })
-            if (auto* p = proc.apvts.getParameter (Params::id (dragging, id))) p->endChangeGesture();
+    {
+        if (auto* p = proc.apvts.getParameter (Params::id (dragging, Params::freq)); p != nullptr && touchedFreq) p->endChangeGesture();
+        if (auto* p = proc.apvts.getParameter (Params::id (dragging, Params::level)); p != nullptr && touchedLevel) p->endChangeGesture();
+        touchedFreq = touchedLevel = false;
+    }
     if (soloDrag)
     {
         // a plain click toggles solo; a drag from the headphones only listens while held
@@ -1025,6 +1067,10 @@ Drawer::Drawer (DellayriumProcessor& p, DellayriumEditor& e) : proc (p), editor 
     for (auto* k : { &time, &timeMs, &feedback, &modeKnob, &duck, &drive, &size, &diffuse, &mix })
         addAndMakeVisible (*k);
     duck.gainReduction = [this] { return proc.bandGr[band].load(); };
+    duckAtk.name = "ATK";
+    duckRel.name = "REL";
+    addAndMakeVisible (duckAtk);
+    addAndMakeVisible (duckRel);
 
     modeBox.addItemList ({ "MONO", "PING-PONG", "WIDE", "SPECTRAL WIDE" }, 1);
     driveBox.addItemList ({ "DRIVE: TAPE", "DRIVE: TUBE", "DRIVE: GENTLE", "DRIVE: TRANSFORM" }, 1);
@@ -1046,7 +1092,7 @@ void Drawer::bindBand (int b)
     // Release the previous band's attachments first. Otherwise, while the controls jump to the
     // new band's values, the old attachments would write those values into the old band.
     aTime.reset(); aMs.reset(); aFb.reset(); aAmt.reset(); aDuck.reset(); aDrive.reset();
-    aSize.reset(); aDiff.reset(); aMix.reset(); aMode.reset(); aDtype.reset(); onAttach.reset();
+    aSize.reset(); aDiff.reset(); aMix.reset(); aAtk.reset(); aRel.reset(); aMode.reset(); aDtype.reset(); onAttach.reset();
     using SA = AudioProcessorValueTreeState::SliderAttachment;
     using CA = AudioProcessorValueTreeState::ComboBoxAttachment;
     auto& st = proc.apvts;
@@ -1059,6 +1105,11 @@ void Drawer::bindBand (int b)
     aSize = std::make_unique<SA> (st, Params::id (band, Params::size), size.slider);
     aDiff = std::make_unique<SA> (st, Params::id (band, Params::diff), diffuse.slider);
     aMix = std::make_unique<SA> (st, Params::id (band, Params::mix), mix.slider);
+    aAtk = std::make_unique<SA> (st, Params::id (band, Params::datk), duckAtk);
+    aRel = std::make_unique<SA> (st, Params::id (band, Params::drel), duckRel);
+    for (auto [mp, pid] : { std::pair<MiniParam*, const char*> { &duckAtk, Params::datk }, { &duckRel, Params::drel } })
+        if (auto* prm = st.getParameter (Params::id (band, pid)))
+            mp->setDoubleClickReturnValue (true, prm->convertFrom0to1 (prm->getDefaultValue()));
     aMode = std::make_unique<CA> (st, Params::id (band, Params::mode), modeBox);
     aDtype = std::make_unique<CA> (st, Params::id (band, Params::dtype), driveBox);
     feel.bind (st.getParameter (Params::id (band, Params::feel)));
@@ -1098,6 +1149,8 @@ void Drawer::setHelp (bool on, Help::Lang l)
     feedback.slider.setTooltip (tip ("feedback"));
     modeBox.setTooltip (tip ("mode"));
     duck.slider.setTooltip (tip ("duck"));
+    duckAtk.setTooltip (tip ("duckAttack"));
+    duckRel.setTooltip (tip ("duckRelease"));
     drive.slider.setTooltip (tip ("drive"));
     driveBox.setTooltip (tip ("driveType"));
     size.slider.setTooltip (tip ("size"));
@@ -1112,7 +1165,7 @@ Rectangle<int> Drawer::tourRect (const String& name) const
     if (name == "engine") return engine.getBounds();
     if (name == "time") return u (time, feel).getUnion (feedback.getBounds());
     if (name == "mode") return u (modeBox, modeKnob);
-    if (name == "duck") return duck.getBounds();
+    if (name == "duck") return duck.getBounds().getUnion (duckAtk.getBounds()).getUnion (duckRel.getBounds());
     if (name == "drive") return u (driveBox, drive);
     if (name == "space") return u (size, diffuse);
     if (name == "mix") return mix.getBounds();
@@ -1130,9 +1183,13 @@ void Drawer::updateColours()
     }
     feel.colour = c;
     engine.colour = c;
+    duckAtk.colour = c;
+    duckRel.colour = c;
+    duckAtk.repaint();
+    duckRel.repaint();
     modeBox.setColour (ComboBox::arrowColourId, c);
     driveBox.setColour (ComboBox::arrowColourId, c);
-    for (auto* comp : std::initializer_list<Component*> { &time, &timeMs, &feedback, &modeKnob, &duck, &drive, &size, &diffuse, &mix, &feel, &modeBox, &driveBox })
+    for (auto* comp : std::initializer_list<Component*> { &time, &timeMs, &feedback, &modeKnob, &duck, &drive, &size, &diffuse, &mix, &feel, &modeBox, &driveBox, &duckAtk, &duckRel })
         comp->setAlpha (bandEnabled ? 1.0f : 0.35f);
     repaint();
 }
@@ -1195,6 +1252,11 @@ void Drawer::resized()
     modeBox.setBounds (Rectangle<float> (slot (2) - boxW * 0.5f, y0 - 3, boxW, 23).toNearestInt());
     knobBox (modeKnob, 2, false);
     knobBox (duck, 3, true);
+    {
+        const float pw = jmin (56.0f, slotW * 0.5f - 3.0f);
+        duckAtk.setBounds (Rectangle<float> (slot (3) - pw - 2, y0 + 110, pw, 32).toNearestInt());
+        duckRel.setBounds (Rectangle<float> (slot (3) + 2, y0 + 110, pw, 32).toNearestInt());
+    }
     driveBox.setBounds (Rectangle<float> (slot (4) - boxW * 0.5f, y0 - 3, boxW, 23).toNearestInt());
     knobBox (drive, 4, false);
     knobBox (size, 5, true);

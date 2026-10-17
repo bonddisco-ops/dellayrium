@@ -64,7 +64,7 @@ private:
         std::atomic<float>* engine; std::atomic<float>* sync; std::atomic<float>* feel; std::atomic<float>* ms;
         std::atomic<float>* fb; std::atomic<float>* mode; std::atomic<float>* amt; std::atomic<float>* duck;
         std::atomic<float>* drive; std::atomic<float>* dtype; std::atomic<float>* size; std::atomic<float>* diff;
-        std::atomic<float>* mix;
+        std::atomic<float>* mix; std::atomic<float>* datk; std::atomic<float>* drel;
     };
     std::array<BandParams, Params::numBands> bp {};
     std::atomic<float>* dryParam = nullptr;
@@ -74,7 +74,6 @@ private:
     dly::SpectralSplitter splitter;
     std::array<float, Params::numBands> curFreq {}, curQ {}, curLevel {}, curMix {}, curFb {};
     float curDry = 1.0f, curWet = 0.7f;
-    float inEnv = 0.0f;
     double sr = 44100.0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DellayriumProcessor)

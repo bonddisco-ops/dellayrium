@@ -80,11 +80,42 @@ DellayriumEditor::DellayriumEditor (DellayriumProcessor& p) : AudioProcessorEdit
     ready = true;
     setSize (jlimit (1100, 3400, w), jlimit (700, 2000, h));
 
+    seenPresetLoads = proc.presets.loadCount();
+    pickLiveBand();
+    startTimerHz (10);
+
     if (loadSetting ("tour", "") != "never" && ! askedThisRun)
     {
         askedThisRun = true;
         welcome.setVisible (true);
         welcome.toFront (false);
+    }
+}
+
+// After a preset change the drawer must not keep showing a band the preset doesn't use
+void DellayriumEditor::pickLiveBand()
+{
+    auto isOn = [this] (int b)
+    {
+        auto* p = proc.apvts.getRawParameterValue (Params::id (b, Params::on));
+        return p != nullptr && p->load() > 0.5f;
+    };
+    int b = proc.getSelectedBand();
+    if (! isOn (b))
+        for (int i = 0; i < Params::numBands; ++i)
+            if (isOn (i)) { b = i; break; }
+    if (proc.soloBand.load() >= 0 && ! isOn (proc.soloBand.load()))
+        proc.soloBand = -1;
+    selectBand (b, false);
+}
+
+void DellayriumEditor::timerCallback()
+{
+    const int loads = proc.presets.loadCount();
+    if (loads != seenPresetLoads)
+    {
+        seenPresetLoads = loads;
+        pickLiveBand();
     }
 }
 

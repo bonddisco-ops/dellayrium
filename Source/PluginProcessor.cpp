@@ -16,7 +16,7 @@ DellayriumProcessor::DellayriumProcessor()
         bp[(size_t) b] = { get (Params::on), get (Params::freq), get (Params::level), get (Params::q), get (Params::engine),
                            get (Params::sync), get (Params::feel), get (Params::ms), get (Params::fb), get (Params::mode),
                            get (Params::amt), get (Params::duck), get (Params::drive), get (Params::dtype), get (Params::size),
-                           get (Params::diff), get (Params::mix) };
+                           get (Params::diff), get (Params::mix), get (Params::datk), get (Params::drel) };
     }
     dryParam = apvts.getRawParameterValue (dry);
     wetParam = apvts.getRawParameterValue (wet);
@@ -46,7 +46,6 @@ void DellayriumProcessor::prepareToPlay (double sampleRate, int)
     }
     curDry = dryParam->load() * 0.01f;
     curWet = wetParam->load() * 0.01f;
-    inEnv = 0.0f;
 }
 
 float DellayriumProcessor::delaySeconds (int b) const
@@ -85,7 +84,8 @@ void DellayriumProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
     {
         bool active = false, fftEngine = false;
         int mode = 0, dtype = 0;
-        float targetLevel = 0, targetMix = 1, targetFb = 0, amt = 0, duck = 0, drive = 0, diffG = 0;
+        float targetLevel = 0, targetMix = 1, targetFb = 0, amt = 0, duck = 0, drive = 0, diffG = 0, makeup = 1;
+        float duckAtt = 1, duckRel = 1;
         float timeL = 1, timeR = 1;
     };
     std::array<Block, Params::numBands> blk;
@@ -114,6 +114,11 @@ void DellayriumProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
         k.amt = p.amt->load() * 0.01f;
         k.duck = p.duck->load() * 0.01f;
         k.drive = p.drive->load() * 0.01f;
+        // the shaper keeps unity gain for quiet signals so feedback can never run away;
+        // the extra loudness of a driven echo is added after the loop
+        k.makeup = 1.0f + k.drive * 0.8f;
+        k.duckAtt = 1.0f - std::exp (-1.0f / (jmax (0.1f, p.datk->load()) * 0.001f * fsr));
+        k.duckRel = 1.0f - std::exp (-1.0f / (jmax (10.0f, p.drel->load()) * 0.001f * fsr));
         k.diffG = p.diff->load() * 0.0072f;
 
         // filter coefficients glide towards the target a little each block
@@ -166,8 +171,6 @@ void DellayriumProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
     const float targetDry = dryParam->load() * 0.01f, targetWet = wetParam->load() * 0.01f;
     const float smooth = 1.0f - std::exp (-1.0f / (0.02f * fsr));     // ~20 ms parameter glide
     const float timeSmooth = 1.0f - std::exp (-1.0f / (0.08f * fsr));
-    const float envAtt = 1.0f - std::exp (-1.0f / (0.003f * fsr));
-    const float envRel = 1.0f - std::exp (-1.0f / (0.15f * fsr));
     const float energyDecay = std::exp (-1.0f / (0.25f * fsr));
 
     std::array<std::array<float, 2>, dly::SpectralSplitter::maxBands> fftOut {};
@@ -183,7 +186,6 @@ void DellayriumProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
         inPk[0] = jmax (inPk[0], std::abs (xL));
         inPk[1] = jmax (inPk[1], std::abs (xR));
         const float a = jmax (std::abs (xL), std::abs (xR));
-        inEnv += (a > inEnv ? envAtt : envRel) * (a - inEnv);
 
         if (useFft)
             splitter.process (xL, xR, fftOut);
@@ -298,15 +300,17 @@ void DellayriumProcessor::processBlock (AudioBuffer<float>& buffer, MidiBuffer&)
                 }
             }
             // duck the echo while the dry signal plays
+            // each band has its own envelope, with its own attack and release
+            s.env += (a > s.env ? k.duckAtt : k.duckRel) * (a - s.env);
             float g = 1.0f;
             if (k.duck > 0.001f)
             {
-                const float gr = k.duck * jlimit (0.0f, 1.0f, inEnv * 3.0f);
+                const float gr = k.duck * jlimit (0.0f, 1.0f, s.env * 3.0f);
                 g = 1.0f - 0.94f * gr;
             }
             s.grDb = Decibels::gainToDecibels (g);
-            oL *= g * mx;
-            oR *= g * mx;
+            oL *= g * mx * k.makeup;
+            oR *= g * mx * k.makeup;
             s.energy = jmax (s.energy * energyDecay, jmax (std::abs (oL), std::abs (oR)));
 
             wetL += oL;

@@ -24,6 +24,8 @@ namespace Params
     inline constexpr const char* mode   = "mode";    // Mono / Ping-Pong / Wide / Spectral Wide
     inline constexpr const char* amt    = "amt";     // the knob under the mode: Darken / Swing / Width / Scatter
     inline constexpr const char* duck   = "duck";
+    inline constexpr const char* datk   = "datk";    // duck attack, ms
+    inline constexpr const char* drel   = "drel";    // duck release, ms
     inline constexpr const char* drive  = "drive";
     inline constexpr const char* dtype  = "dtype";
     inline constexpr const char* size   = "size";
@@ -87,7 +89,7 @@ namespace Params
             group->addChild (std::make_unique<AudioParameterBool> (ParameterID { id (b, on), 1 }, n + "On", d.on));
             NormalisableRange<float> fr (20.0f, 20000.0f);
             fr.setSkewForCentre (1000.0f);
-            group->addChild (std::make_unique<AudioParameterFloat> (ParameterID { id (b, freq), 1 }, n + "Freq", fr, d.freq,
+            group->addChild (std::make_unique<AudioParameterFloat> (ParameterID { id (b, freq), 1 }, n + "Frequency", fr, d.freq,
                 AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int)
                 { return v >= 1000.0f ? String (v / 1000.0f, 2) + " kHz" : String (roundToInt (v)) + " Hz"; })));
             group->addChild (std::make_unique<AudioParameterFloat> (ParameterID { id (b, level), 1 }, n + "Level", NormalisableRange<float> (0, 1), d.level,
@@ -110,6 +112,14 @@ namespace Params
                 AudioParameterFloatAttributes().withStringFromValueFunction (pct)));
             group->addChild (std::make_unique<AudioParameterFloat> (ParameterID { id (b, duck), 1 }, n + "Duck", NormalisableRange<float> (0, 100), 0.0f,
                 AudioParameterFloatAttributes().withStringFromValueFunction (pct)));
+            NormalisableRange<float> ar (0.1f, 200.0f);
+            ar.setSkewForCentre (10.0f);
+            group->addChild (std::make_unique<AudioParameterFloat> (ParameterID { id (b, datk), 1 }, n + "Duck Attack", ar, 5.0f,
+                AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return v < 10.0f ? String (v, 1) + " ms" : String (roundToInt (v)) + " ms"; })));
+            NormalisableRange<float> rr (10.0f, 3000.0f);
+            rr.setSkewForCentre (250.0f);
+            group->addChild (std::make_unique<AudioParameterFloat> (ParameterID { id (b, drel), 1 }, n + "Duck Release", rr, 250.0f,
+                AudioParameterFloatAttributes().withStringFromValueFunction ([] (float v, int) { return v >= 1000.0f ? String (v / 1000.0f, 2) + " s" : String (roundToInt (v)) + " ms"; })));
             group->addChild (std::make_unique<AudioParameterFloat> (ParameterID { id (b, drive), 1 }, n + "Drive", NormalisableRange<float> (0, 100), 0.0f,
                 AudioParameterFloatAttributes().withStringFromValueFunction (pct)));
             group->addChild (std::make_unique<AudioParameterChoice> (ParameterID { id (b, dtype), 1 }, n + "Drive Type", driveNames(), 0));

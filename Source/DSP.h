@@ -117,18 +117,20 @@ inline float driveSample (float x, int type, float amount)
 {
     if (amount <= 0.0005f)
         return x;
+    // Every shape has a slope of 1 around zero: quiet repeats pass at the same level, loud ones
+    // saturate. That keeps the feedback loop stable at any drive setting.
     const float pre = 1.0f + amount * 14.0f;
     const float v = x * pre;
     float y;
     switch (type)
     {
         case 0:  y = std::tanh (v); break;                                                        // tape: soft, round
-        case 1:  y = v >= 0 ? std::tanh (v * 1.2f) : std::tanh (v * 0.7f) * 1.15f; break;         // tube: asymmetric, adds even harmonics
-        case 2:  y = v / (1.0f + std::abs (v)); break;                                            // gentle
-        default: y = std::sin (v * 1.4f) * 0.8f; break;                                           // transform: wave folding
+        case 1:  y = v >= 0 ? std::tanh (v) : std::tanh (v * 2.2f) / 2.2f; break;                 // tube: asymmetric, adds even harmonics
+        case 2:  y = v / (1.0f + 0.5f * std::abs (v)); break;                                     // gentle
+        default: y = std::sin (v * 1.4f) / 1.4f; break;                                           // transform: wave folding
     }
     const float wetAmt = juce::jmin (1.0f, amount * 3.0f);
-    return x + (y / std::sqrt (pre) - x) * wetAmt;
+    return x + (y / pre - x) * wetAmt;
 }
 
 //==============================================================================

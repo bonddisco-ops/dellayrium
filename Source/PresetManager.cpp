@@ -14,9 +14,16 @@ namespace
             { "Ping-Pong Hats", { { id (1, on), 0 }, { id (5, on), 0 }, { id (3, on), 0 },
                                   { id (6, on), 1 }, { id (6, mode), 1 }, { id (6, Params::sync), 2 }, { id (6, level), 0.8f }, { id (6, fb), 55 }, { id (6, amt), 25 },
                                   { id (7, on), 1 }, { id (7, mode), 1 }, { id (7, Params::sync), 1 }, { id (7, feel), 2 }, { id (7, fb), 40 } } },
-            { "Dub Darkness", { { id (5, on), 0 }, { id (3, on), 0 },
-                                { id (1, on), 1 }, { id (1, mode), 0 }, { id (1, Params::sync), 4 }, { id (1, feel), 1 }, { id (1, fb), 75 }, { id (1, amt), 60 },
-                                { id (1, drive), 35 }, { id (1, dtype), 0 }, { id (1, level), 0.8f }, { id (2, on), 1 }, { id (2, mode), 0 }, { id (2, fb), 60 }, { id (2, amt), 45 } } },
+            // one wide mid band repeating dotted quarters, each repeat darker and dirtier, plus a quiet
+            // ping-pong shimmer on top; both duck under the dry signal and swell back in
+            { "Dub Darkness", { { id (1, on), 0 }, { id (5, on), 0 },
+                                { id (3, on), 1 }, { id (3, freq), 900 }, { id (3, q), 0.7f }, { id (3, level), 0.9f }, { id (3, mode), 0 },
+                                { id (3, Params::sync), 4 }, { id (3, feel), 1 }, { id (3, fb), 62 }, { id (3, amt), 65 },
+                                { id (3, drive), 30 }, { id (3, dtype), 0 }, { id (3, duck), 35 }, { id (3, drel), 400 },
+                                { id (3, diff), 12 }, { id (3, size), 18 },
+                                { id (4, on), 1 }, { id (4, freq), 2600 }, { id (4, q), 1.2f }, { id (4, level), 0.55f }, { id (4, mode), 1 },
+                                { id (4, Params::sync), 3 }, { id (4, feel), 1 }, { id (4, fb), 45 }, { id (4, amt), 15 },
+                                { id (4, drive), 20 }, { id (4, duck), 35 }, { id (4, drel), 400 }, { id (4, mix), 70 } } },
             { "Glass Cloud", { { id (3, diff), 80 }, { id (3, size), 30 }, { id (5, diff), 85 }, { id (5, size), 22 }, { id (1, on), 0 },
                                { id (4, on), 1 }, { id (4, mode), 3 }, { id (4, engine), 1 }, { id (4, diff), 70 }, { id (4, amt), 80 } } },
             { "Tape Slapback", { { id (5, on), 0 }, { id (1, on), 0 }, { id (3, q), 0.5f }, { id (3, level), 0.9f }, { id (3, feel), 3 }, { id (3, ms), 110 },
@@ -47,6 +54,7 @@ bool PresetManager::loadFactory (int index)
             p->setValueNotifyingHost (p->convertTo0to1 (v));
     currentName = factory()[(size_t) index].name;
     markClean();
+    ++loads;
     return true;
 }
 
@@ -101,6 +109,7 @@ void PresetManager::loadInit()
         p->setValueNotifyingHost (p->getDefaultValue());
     currentName = "Init";
     markClean();
+    ++loads;
 }
 
 bool PresetManager::load (const juce::String& name)
@@ -117,6 +126,7 @@ bool PresetManager::load (const juce::String& name)
     apvts.replaceState (juce::ValueTree::fromXml (*xml));
     currentName = name;
     markClean();
+    ++loads;
     return true;
 }
 

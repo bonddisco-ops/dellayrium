@@ -191,6 +191,82 @@ int main (int argc, char** argv)
         check ((t1 - t0) < 10000.0 * 0.35, "CPU under 35 % of a core for 8 bands at 48 kHz");
     }
 
+    // drive must never make the feedback loop run away: 85 % feedback + 100 % drive has to die out
+    {
+        static const char* names[] = { "Tape", "Tube", "Gentle", "Transform" };
+        for (int t = 0; t < 4; ++t)
+        {
+            soloBandSetup (p, 3, 1000.0f, 0, 0, 150.0f, 85.0f);
+            setP (p, Params::id (3, Params::q), 0.6f);
+            setP (p, Params::id (3, Params::drive), 100);
+            setP (p, Params::id (3, Params::dtype), (float) t);
+            setP (p, Params::id (3, Params::duck), 0);
+            reset (p);
+            AudioBuffer<float> in (2, (int) (SR * 10));
+            in.clear();
+            Random rnd (3);
+            for (int i = 0; i < (int) (SR * 0.5); ++i)
+            {
+                const float v = (rnd.nextFloat() * 2 - 1) * 0.8f;
+                in.setSample (0, i, v); in.setSample (1, i, v);
+            }
+            auto out = run (p, in);
+            const float loud = rms (out, 0, (int) (SR * 0.2), (int) (SR * 0.5)), tail = rms (out, 0, (int) (SR * 9), (int) SR);
+            const float db = Decibels::gainToDecibels (tail / jmax (1.0e-9f, loud), -200.0f);
+            std::cout << "   drive " << names[t] << " 100 % at feedback 85 %: tail after 9 s " << db << " dB\n";
+            check (db < -40.0f, String ("drive ") + names[t] + ": echoes die out instead of droning");
+        }
+    }
+
+    // every factory preset has to ring out and stop
+    {
+        const auto names = PresetManager::getFactoryNames();
+        for (int i = 0; i < names.size(); ++i)
+        {
+            reset (p);
+            p.presets.loadFactory (i);
+            AudioBuffer<float> in (2, (int) (SR * 14));
+            in.clear();
+            Random rnd (5);
+            for (int s = 0; s < (int) (SR * 2); ++s)
+            {
+                const float tt = (float) (s % 12000) / 12000.0f;
+                const float v = (rnd.nextFloat() * 2 - 1) * std::exp (-tt * 9.0f) * 0.5f;
+                in.setSample (0, s, v); in.setSample (1, s, v);
+            }
+            auto out = run (p, in);
+            const float loud = rms (out, 0, 0, (int) (SR * 2)), tail = rms (out, 0, (int) (SR * 13), (int) SR);
+            bool finite = true;
+            for (int s = 0; s < out.getNumSamples(); ++s) finite = finite && std::isfinite (out.getSample (0, s));
+            const float db = Decibels::gainToDecibels (tail / jmax (1.0e-9f, loud), -200.0f);
+            std::cout << "   preset " << names[i] << ": tail 11 s after the input stops " << db << " dB\n";
+            check (finite && db < -40.0f, "preset " + names[i] + " rings out");
+        }
+    }
+
+    // duck release: with a short release the echo is back quickly, with a long one it is still held down
+    {
+        float grFast = 0, grSlow = 0;
+        for (int pass = 0; pass < 2; ++pass)
+        {
+            soloBandSetup (p, 3, 1000.0f, 0, 0, 50.0f, 0.0f);
+            setP (p, Params::id (3, Params::duck), 100);
+            setP (p, Params::id (3, Params::datk), 1);
+            setP (p, Params::id (3, Params::drel), pass == 0 ? 50.0f : 1000.0f);
+            reset (p);
+            run (p, sine (1000.0f, 1.0f));
+            AudioBuffer<float> sil (2, (int) (SR * 0.2));
+            sil.clear();
+            run (p, sil);
+            (pass == 0 ? grFast : grSlow) = p.bandGr[3].load();
+        }
+        std::cout << "== duck 200 ms after the input stops: release 50 ms " << grFast << " dB, release 1 s " << grSlow << " dB\n";
+        check (grFast > -1.0f && grSlow < -10.0f, "duck release time works");
+        check (p.apvts.getParameter (Params::id (0, Params::freq))->getName (100) == "Band 1 Frequency"
+                && p.apvts.getParameter (Params::id (0, Params::datk)) != nullptr && p.apvts.getParameter (Params::id (0, Params::drel)) != nullptr,
+               "Frequency, Duck Attack and Duck Release are automatable parameters");
+    }
+
     // ---- screenshots
     {
         DellayriumProcessor q;
@@ -274,6 +350,20 @@ int main (int argc, char** argv)
                 MessageManager::getInstance()->runDispatchLoopUntil (100);
                 check (std::lround (m0->convertFrom0to1 (m0->getValue())) == 3 && std::lround (m2->convertFrom0to1 (m2->getValue())) == 1,
                        "band modes kept when switching bands");
+
+                // after a preset change the drawer shows a band that is actually on
+                q.setSelectedBand (1);
+                q.presets.loadFactory (PresetManager::getFactoryNames().indexOf ("Ping-Pong Hats"));
+                MessageManager::getInstance()->runDispatchLoopUntil (400);
+                const int selAfter = q.getSelectedBand();
+                check (q.apvts.getRawParameterValue (Params::id (selAfter, Params::on))->load() > 0.5f,
+                       "drawer jumps to a live band after a preset change (band " + String (selAfter + 1) + ")");
+                q.presets.loadFactory (PresetManager::getFactoryNames().indexOf ("Dub Darkness"));
+                MessageManager::getInstance()->runDispatchLoopUntil (400);
+                auto dimg = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+                auto fd = outDir.getChildFile ("ui-dub.png");
+                fd.deleteFile();
+                if (auto os = fd.createOutputStream()) PNGImageFormat().writeImageToStream (dimg, *os);
 
                 check (welcomeShown, "welcome prompt shown on first open");
                 welcome->setVisible (true);

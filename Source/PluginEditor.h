@@ -1,7 +1,7 @@
 #pragma once
 #include "Ui.h"
 
-class DellayriumEditor : public juce::AudioProcessorEditor
+class DellayriumEditor : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     explicit DellayriumEditor (DellayriumProcessor&);
@@ -34,6 +34,9 @@ private:
     juce::String toast;
     juce::uint32 toastUntil = 0;
     bool ready = false, helpOn = true;
+    int seenPresetLoads = 0;
+    void timerCallback() override;
+    void pickLiveBand();
     Help::Lang lang = Help::Lang::en;
     std::unique_ptr<juce::TooltipWindow> tooltipWindow;
 

@@ -69,6 +69,16 @@ private:
     std::unique_ptr<juce::ParameterAttachment> attach;
 };
 
+// Small pill with a name and a value: drag up/down to change, double-click for the default
+class MiniParam : public juce::Slider
+{
+public:
+    MiniParam();
+    void paint (juce::Graphics&) override;
+    juce::String name;
+    juce::Colour colour { 0xffff73b2 };
+};
+
 //==============================================================================
 class DellayriumEditor;
 
@@ -111,7 +121,7 @@ private:
     juce::Random rnd;
 
     int hover = -1, dragging = -1;
-    bool dragMoved = false, soloDrag = false, soloWasOn = false;
+    bool dragMoved = false, soloDrag = false, soloWasOn = false, touchedFreq = false, touchedLevel = false;
     juce::Point<float> dragStart, grabOffset;
 
     void timerCallback() override;
@@ -162,10 +172,11 @@ private:
     float openness = 1.0f;
 
     Knob time, timeMs, feedback, modeKnob, duck, drive, size, diffuse, mix;
+    MiniParam duckAtk, duckRel;
     Segmented feel { { "1/1", ".", "T", "ms" }, false };
     Segmented engine { { "ANALOG", "FFT" }, true };
     juce::ComboBox modeBox, driveBox;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> aTime, aMs, aFb, aAmt, aDuck, aDrive, aSize, aDiff, aMix;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> aTime, aMs, aFb, aAmt, aDuck, aDrive, aSize, aDiff, aMix, aAtk, aRel;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> aMode, aDtype;
     std::unique_ptr<juce::ParameterAttachment> onAttach;
     bool bandEnabled = true, helpOn = true;
