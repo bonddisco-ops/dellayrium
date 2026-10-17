@@ -1249,9 +1249,9 @@ void Drawer::paint (Graphics& g)
     }
     g.setColour (c);
     g.fillEllipse (cx - 120, top + 18, 12, 12);
-    g.setColour (kInk);
+    g.setColour (bandEnabled ? kInk : kMute.withAlpha (0.6f));
     g.setFont (uiFont (13.0f, true, 0.3f));
-    g.drawText ("BAND " + String (band + 1) + (bandEnabled ? "" : "  OFF"), Rectangle<float> (cx - 100, top + 14, 150, 20), Justification::centredLeft);
+    g.drawText ("BAND " + String (band + 1), Rectangle<float> (cx - 100, top + 14, 104, 20), Justification::centredLeft);
     const auto ch = chevronRect();
     Path chev;
     if (open) { chev.startNewSubPath (ch.getX() + 8, ch.getY() + 10); chev.lineTo (ch.getCentreX(), ch.getY() + 18); chev.lineTo (ch.getRight() - 8, ch.getY() + 10); }
