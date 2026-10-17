@@ -1,0 +1,85 @@
+name: Build Dellayrium
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            cmake -B build -G Xcode -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          else
+            cmake -B build -A x64
+          fi
+
+      - name: Build
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build build --config Release --target Dellayrium_All --parallel 4 2>&1 | tee build.log
+
+      - name: Show compile errors
+        if: failure()
+        shell: bash
+        run: |
+          grep -E "error" build.log | grep -v "warning" | head -40 | while IFS= read -r line; do echo "::error::$line"; done
+
+      - name: Collect files
+        shell: bash
+        run: |
+          mkdir -p out
+          ART=build/Dellayrium_artefacts/Release
+          cp -R "$ART/VST3/Dellayrium.vst3" out/
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            cp -R "$ART/AU/Dellayrium.component" out/
+            cp -R "$ART/Standalone/Dellayrium.app" out/
+            codesign --force --deep -s - "out/Dellayrium.vst3" "out/Dellayrium.component" "out/Dellayrium.app" || true
+            cp "Installer/Install Dellayrium.command" out/
+            chmod +x "out/Install Dellayrium.command"
+          else
+            cp "$ART/Standalone/Dellayrium.exe" out/
+            cp "Installer/Install Dellayrium.bat" out/
+          fi
+          cp "Installer/HOW TO INSTALL.txt" out/
+          cd out
+          if [ "$RUNNER_OS" == "macOS" ]; then
+            ditto -c -k --keepParent . "../Dellayrium-macOS.zip"
+          else
+            7z a -tzip "../Dellayrium-Windows.zip" . > /dev/null
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dellayrium-${{ matrix.name }}
+          path: out/
+
+      - name: Publish to the "latest" release
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view latest >/dev/null 2>&1 || gh release create latest --title "Dellayrium (latest build)" --notes "Fresh build from the main branch. Download the zip for your system." --prerelease
+          gh release upload latest Dellayrium-*.zip --clobber
