@@ -197,10 +197,10 @@ void DLook::drawTooltip (Graphics& g, const String& text, int w, int h)
     tl.draw (g, r.reduced (11.0f, 8.0f));
 }
 
-void DLook::drawButtonBackground (Graphics& g, Button& b, const Colour&, bool hi, bool)
+void DLook::drawButtonBackground (Graphics& g, Button& b, const Colour& base, bool hi, bool)
 {
     const auto r = b.getLocalBounds().toFloat().reduced (0.5f);
-    g.setColour (hi ? Colour (0xff2e2e34) : Colour (0xff26262b));
+    g.setColour (hi ? base.brighter (0.12f) : base);
     g.fillRoundedRectangle (r, 6.0f);
     g.setColour (Colours::white.withAlpha (0.1f));
     g.drawRoundedRectangle (r, 6.0f, 1.0f);
@@ -208,7 +208,7 @@ void DLook::drawButtonBackground (Graphics& g, Button& b, const Colour&, bool hi
 
 void DLook::drawButtonText (Graphics& g, TextButton& b, bool, bool)
 {
-    g.setColour (kInk);
+    g.setColour (b.findColour (TextButton::textColourOffId));
     g.setFont (uiFont (14.0f));
     g.drawText (b.getButtonText(), b.getLocalBounds(), Justification::centred);
 }
@@ -850,7 +850,15 @@ void Screen::mouseDown (const MouseEvent& e)
     const int sel = editor.selectedBand();
     if (bandOn (sel) && soloRect().contains (e.position))
     {
-        proc.soloBand = proc.soloBand.load() == sel ? -1 : sel;
+        // press the headphones: solo now; drag from here and the point follows while you listen
+        soloWasOn = proc.soloBand.load() == sel;
+        proc.soloBand = sel;
+        soloDrag = true;
+        dragging = sel;
+        dragStart = e.position;
+        grabOffset = nodePos (sel) - e.position;
+        for (auto* id : { Params::freq, Params::level })
+            if (auto* p = proc.apvts.getParameter (Params::id (sel, id))) p->beginChangeGesture();
         repaint();
         return;
     }
@@ -882,6 +890,7 @@ void Screen::mouseDown (const MouseEvent& e)
     }
     dragging = n;
     dragStart = e.position;
+    grabOffset = nodePos (n) - e.position;
     for (auto* id : { Params::freq, Params::level })
         if (auto* p = proc.apvts.getParameter (Params::id (n, id))) p->beginChangeGesture();
 }
@@ -890,10 +899,14 @@ void Screen::mouseDrag (const MouseEvent& e)
 {
     if (dragging < 0)
         return;
-    dragMoved = true;
+    if (e.getDistanceFromDragStart() > 2)
+        dragMoved = true;
+    if (! dragMoved)
+        return;
     auto pos = e.position;
     if (e.mods.isShiftDown())
         pos = dragStart + (e.position - dragStart) * 0.25f;
+    pos += grabOffset;
     const float f = jlimit (20.0f, 20000.0f, fFor (jlimit (plot.getX(), plot.getRight(), pos.x)));
     const float lvl = jlimit (0.0f, 1.0f, (zeroY() - pos.y) / bellH());
     setParam (dragging, Params::freq, f);
@@ -906,7 +919,25 @@ void Screen::mouseUp (const MouseEvent&)
     if (dragging >= 0)
         for (auto* id : { Params::freq, Params::level })
             if (auto* p = proc.apvts.getParameter (Params::id (dragging, id))) p->endChangeGesture();
+    if (soloDrag)
+    {
+        // a plain click toggles solo; a drag from the headphones only listens while held
+        if (dragMoved) proc.soloBand = soloWasOn ? dragging : -1;
+        else proc.soloBand = soloWasOn ? -1 : dragging;
+        soloDrag = false;
+    }
     dragging = -1;
+    repaint();
+}
+
+Rectangle<float> Screen::tourRect (const String& name) const
+{
+    const int sel = editor.selectedBand();
+    if (name == "screen") return screenArea();
+    if (name == "node") return Rectangle<float> (60, 60).withCentre (nodePos (sel));
+    if (name == "solo") return tagRect (sel).expanded (4);
+    if (name == "analyzer") return { plot.getX(), zeroY() + 4, plot.getWidth(), jmax (40.0f, screenArea().getBottom() - bottomReserve - zeroY() - 10) };
+    return {};
 }
 
 void Screen::mouseDoubleClick (const MouseEvent& e)
@@ -994,11 +1025,6 @@ Drawer::Drawer (DellayriumProcessor& p, DellayriumEditor& e) : proc (p), editor 
     for (auto* k : { &time, &timeMs, &feedback, &modeKnob, &duck, &drive, &size, &diffuse, &mix })
         addAndMakeVisible (*k);
     duck.gainReduction = [this] { return proc.bandGr[band].load(); };
-    duck.slider.setTooltip ("Duck: the echo gets out of the way while the dry signal plays. The orange ring shows how much it is pushed down right now.");
-    size.slider.setTooltip ("Size: how big the tiny space is that each repeat sits in (2-50 ms).");
-    diffuse.slider.setTooltip ("Diffuse: how much each repeat is smeared inside that space. 0 = clean repeats, 100 = soft clouds.");
-    mix.slider.setTooltip ("Mix: output level of this band's echo.");
-    feedback.slider.setTooltip ("Feedback: how many times the echo repeats.");
 
     modeBox.addItemList ({ "MONO", "PING-PONG", "WIDE", "SPECTRAL WIDE" }, 1);
     driveBox.addItemList ({ "DRIVE: TAPE", "DRIVE: TUBE", "DRIVE: GENTLE", "DRIVE: TRANSFORM" }, 1);
@@ -1009,7 +1035,6 @@ Drawer::Drawer (DellayriumProcessor& p, DellayriumEditor& e) : proc (p), editor 
     feel.onChange = [this] (int i) { time.setVisible (i != 3); timeMs.setVisible (i == 3); };
     addAndMakeVisible (feel);
     addAndMakeVisible (engine);
-    engine.setTooltip ("Analog: filter + delay, no extra latency, warm.  FFT: cut through the spectrum, razor-sharp band edges, glassy repeats.");
     setInterceptsMouseClicks (true, true);
     bindBand (proc.getSelectedBand());
     startTimerHz (30);
@@ -1018,6 +1043,10 @@ Drawer::Drawer (DellayriumProcessor& p, DellayriumEditor& e) : proc (p), editor 
 void Drawer::bindBand (int b)
 {
     band = jlimit (0, Params::numBands - 1, b);
+    // Release the previous band's attachments first. Otherwise, while the controls jump to the
+    // new band's values, the old attachments would write those values into the old band.
+    aTime.reset(); aMs.reset(); aFb.reset(); aAmt.reset(); aDuck.reset(); aDrive.reset();
+    aSize.reset(); aDiff.reset(); aMix.reset(); aMode.reset(); aDtype.reset(); onAttach.reset();
     using SA = AudioProcessorValueTreeState::SliderAttachment;
     using CA = AudioProcessorValueTreeState::ComboBoxAttachment;
     auto& st = proc.apvts;
@@ -1052,14 +1081,42 @@ void Drawer::updateModeLabel()
     const int m = jlimit (0, 3, modeBox.getSelectedItemIndex());
     const auto name = Params::modeKnob()[m];
     modeKnob.valueText = [this, name] { return name + " " + String (roundToInt (modeKnob.slider.getValue())) + " %"; };
-    static const char* tips[] = {
-        "Darken: every repeat gets a little duller, closed from the top.",
-        "Swing: shifts the right-side bounce later, so the ping-pong grooves instead of ticking evenly.",
-        "Width: from almost mono to as wide as it gets.",
-        "Scatter: how far the frequencies inside the band fly apart across the stereo field."
-    };
-    modeKnob.slider.setTooltip (tips[m]);
+    static const char* keys[] = { "darken", "swing", "width", "scatter" };
+    modeKnob.slider.setTooltip (helpOn ? Help::tip (keys[m], lang) : String());
     modeKnob.repaint();
+}
+
+void Drawer::setHelp (bool on, Help::Lang l)
+{
+    helpOn = on;
+    lang = l;
+    auto tip = [this] (const char* k) { return helpOn ? Help::tip (k, lang) : String(); };
+    engine.setTooltip (tip ("engine"));
+    time.slider.setTooltip (tip ("time"));
+    timeMs.slider.setTooltip (tip ("timeMs"));
+    feel.setTooltip (tip ("feel"));
+    feedback.slider.setTooltip (tip ("feedback"));
+    modeBox.setTooltip (tip ("mode"));
+    duck.slider.setTooltip (tip ("duck"));
+    drive.slider.setTooltip (tip ("drive"));
+    driveBox.setTooltip (tip ("driveType"));
+    size.slider.setTooltip (tip ("size"));
+    diffuse.slider.setTooltip (tip ("diffuse"));
+    mix.slider.setTooltip (tip ("mix"));
+    updateModeLabel();
+}
+
+Rectangle<int> Drawer::tourRect (const String& name) const
+{
+    auto u = [] (const Component& a, const Component& b) { return a.getBounds().getUnion (b.getBounds()); };
+    if (name == "engine") return engine.getBounds();
+    if (name == "time") return u (time, feel).getUnion (feedback.getBounds());
+    if (name == "mode") return u (modeBox, modeKnob);
+    if (name == "duck") return duck.getBounds();
+    if (name == "drive") return u (driveBox, drive);
+    if (name == "space") return u (size, diffuse);
+    if (name == "mix") return mix.getBounds();
+    return {};
 }
 
 void Drawer::updateColours()
@@ -1194,7 +1251,7 @@ void Drawer::paint (Graphics& g)
     g.fillEllipse (cx - 120, top + 18, 12, 12);
     g.setColour (kInk);
     g.setFont (uiFont (13.0f, true, 0.3f));
-    g.drawText ("BAND " + String (band + 1) + (bandEnabled ? "" : "  OFF"), Rectangle<float> (cx - 100, top + 14, 104, 20), Justification::centredLeft);
+    g.drawText ("BAND " + String (band + 1) + (bandEnabled ? "" : "  OFF"), Rectangle<float> (cx - 100, top + 14, 150, 20), Justification::centredLeft);
     const auto ch = chevronRect();
     Path chev;
     if (open) { chev.startNewSubPath (ch.getX() + 8, ch.getY() + 10); chev.lineTo (ch.getCentreX(), ch.getY() + 18); chev.lineTo (ch.getRight() - 8, ch.getY() + 10); }
@@ -1423,4 +1480,216 @@ void PresetBar::askForName (const String& title, const String& initial, std::fun
         if (result == 1 && text.isNotEmpty())
             onOk (text);
     }), true);
+}
+
+//==============================================================================
+TourOverlay::TourOverlay()
+{
+    for (auto* b : { &back, &next, &skip })
+    {
+        b->setWantsKeyboardFocus (false);
+        addAndMakeVisible (*b);
+    }
+    back.onClick = [this] { showStep (step - 1); };
+    next.onClick = [this]
+    {
+        if (step + 1 >= Help::tourLength)
+        {
+            setVisible (false);
+            if (onFinish) onFinish();
+        }
+        else
+        {
+            showStep (step + 1);
+        }
+    };
+    skip.onClick = [this] { setVisible (false); if (onFinish) onFinish(); };
+}
+
+void TourOverlay::start (Help::Lang l)
+{
+    lang = l;
+    setVisible (true);
+    toFront (false);
+    showStep (0);
+}
+
+void TourOverlay::showStep (int s)
+{
+    step = jlimit (0, Help::tourLength - 1, s);
+    const auto& t = themeOf (*this);
+    back.setButtonText (Help::ui ("Back", "Назад", lang));
+    next.setButtonText (step + 1 >= Help::tourLength ? Help::ui ("Done", "Готово", lang) : Help::ui ("Next", "Дальше", lang));
+    skip.setButtonText (Help::ui ("Skip", "Пропустить", lang));
+    next.setColour (TextButton::buttonColourId, t.accent);
+    next.setColour (TextButton::textColourOffId, Colour (0xff111114));
+    back.setVisible (step > 0);
+    skip.setVisible (step + 1 < Help::tourLength);
+    if (onStep)
+        onStep (Help::tour[step].target);
+    resized();
+    repaint();
+}
+
+Rectangle<float> TourOverlay::calloutArea() const
+{
+    const auto& st = Help::tour[step];
+    const auto target = resolveTarget ? resolveTarget (st.target) : Rectangle<float>();
+    const float w = 380.0f;
+    AttributedString s;
+    s.append (Help::ui (st.textEn, st.textRu, lang), uiFont (14.0f), Colours::white);
+    TextLayout tl;
+    tl.createLayout (s, w - 36.0f);
+    const float h = 54.0f + tl.getHeight() + 70.0f;
+    const auto bounds = getLocalBounds().toFloat().reduced (16.0f);
+    if (target.isEmpty())
+        return bounds.withSizeKeepingCentre (w, h);
+    float x = jlimit (bounds.getX(), bounds.getRight() - w, target.getCentreX() - w * 0.5f);
+    float y = target.getBottom() + 22.0f;
+    if (y + h > bounds.getBottom())
+        y = target.getY() - 22.0f - h;
+    if (y < bounds.getY())
+    {
+        // Not enough room above or below: put it to the side
+        y = jlimit (bounds.getY(), bounds.getBottom() - h, target.getCentreY() - h * 0.5f);
+        x = target.getRight() + 22.0f + w < bounds.getRight() ? target.getRight() + 22.0f : target.getX() - 22.0f - w;
+    }
+    return { x, y, w, h };
+}
+
+void TourOverlay::resized()
+{
+    const auto c = calloutArea().toNearestInt();
+    next.setBounds (c.getRight() - 16 - 96, c.getBottom() - 16 - 30, 96, 30);
+    back.setBounds (next.getX() - 8 - 86, next.getY(), 86, 30);
+    skip.setBounds (c.getX() + 14, next.getY(), 104, 30);
+}
+
+void TourOverlay::paint (Graphics& g)
+{
+    const auto& t = themeOf (*this);
+    const auto& st = Help::tour[step];
+    const auto target = resolveTarget ? resolveTarget (st.target) : Rectangle<float>();
+
+    Path dim;
+    dim.addRectangle (getLocalBounds().toFloat());
+    if (! target.isEmpty())
+    {
+        dim.addRoundedRectangle (target.expanded (6.0f), 12.0f);
+        dim.setUsingNonZeroWinding (false);
+    }
+    g.setColour (Colours::black.withAlpha (0.68f));
+    g.fillPath (dim);
+
+    const auto c = calloutArea();
+    if (! target.isEmpty())
+    {
+        g.setColour (t.accent.withAlpha (0.35f));
+        g.drawRoundedRectangle (target.expanded (9.0f), 14.0f, 5.0f);
+        g.setColour (t.accent);
+        g.drawRoundedRectangle (target.expanded (6.0f), 12.0f, 2.0f);
+
+        // Arrow from the card to the highlighted part
+        Point<float> from, to;
+        if (c.getBottom() <= target.getY())       { from = { c.getCentreX(), c.getBottom() }; to = { jlimit (target.getX() + 10.0f, target.getRight() - 10.0f, c.getCentreX()), target.getY() - 8.0f }; }
+        else if (c.getY() >= target.getBottom())  { from = { c.getCentreX(), c.getY() };      to = { jlimit (target.getX() + 10.0f, target.getRight() - 10.0f, c.getCentreX()), target.getBottom() + 8.0f }; }
+        else if (c.getX() >= target.getRight())   { from = { c.getX(), c.getCentreY() };      to = { target.getRight() + 8.0f, jlimit (target.getY() + 10.0f, target.getBottom() - 10.0f, c.getCentreY()) }; }
+        else                                      { from = { c.getRight(), c.getCentreY() };  to = { target.getX() - 8.0f, jlimit (target.getY() + 10.0f, target.getBottom() - 10.0f, c.getCentreY()) }; }
+        Path arrow;
+        arrow.addArrow (Line<float> (from, to), 2.5f, 12.0f, 10.0f);
+        g.setColour (t.accent);
+        g.fillPath (arrow);
+    }
+
+    g.setColour (Colour (0xff141417));
+    g.fillRoundedRectangle (c, 12.0f);
+    g.setColour (t.accent.withAlpha (0.7f));
+    g.drawRoundedRectangle (c.reduced (0.5f), 12.0f, 1.2f);
+
+    g.setColour (t.accentHi);
+    g.setFont (uiFont (17.0f, true));
+    g.drawText (Help::ui (st.titleEn, st.titleRu, lang), c.reduced (18.0f, 0.0f).withY (c.getY() + 14.0f).withHeight (24.0f), Justification::centredLeft);
+    g.setColour (Colour (0xff8a8a94));
+    g.setFont (uiFont (12.0f));
+    g.drawText (String (step + 1) + " / " + String (Help::tourLength), c.reduced (18.0f, 0.0f).withY (c.getY() + 14.0f).withHeight (24.0f), Justification::centredRight);
+
+    AttributedString s;
+    s.append (Help::ui (st.textEn, st.textRu, lang), uiFont (14.0f), Colour (0xffe2e2e8));
+    s.setLineSpacing (3.0f);
+    TextLayout tl;
+    tl.createLayout (s, c.getWidth() - 36.0f);
+    tl.draw (g, Rectangle<float> (c.getX() + 18.0f, c.getY() + 46.0f, c.getWidth() - 36.0f, tl.getHeight()));
+}
+
+//==============================================================================
+WelcomePrompt::WelcomePrompt()
+{
+    for (auto* b : { &yes, &notNow, &never, &en, &ru })
+    {
+        b->setWantsKeyboardFocus (false);
+        addAndMakeVisible (*b);
+    }
+    ru.setButtonText (String::fromUTF8 ("Русский"));
+    yes.onClick = [this] { if (onChoice) onChoice (0); };
+    notNow.onClick = [this] { if (onChoice) onChoice (1); };
+    never.onClick = [this] { if (onChoice) onChoice (2); };
+    en.onClick = [this] { setLang (Help::Lang::en); if (onLanguage) onLanguage (lang); };
+    ru.onClick = [this] { setLang (Help::Lang::ru); if (onLanguage) onLanguage (lang); };
+    setLang (Help::Lang::en);
+}
+
+void WelcomePrompt::setLang (Help::Lang l)
+{
+    lang = l;
+    const auto& t = themeOf (*this);
+    yes.setButtonText (Help::ui ("Yes, show me", "Да, покажи", lang));
+    notNow.setButtonText (Help::ui ("Not now", "Не сейчас", lang));
+    never.setButtonText (Help::ui ("Don't ask again", "Больше не спрашивать", lang));
+    yes.setColour (TextButton::buttonColourId, t.accent);
+    yes.setColour (TextButton::textColourOffId, Colour (0xff111114));
+    for (auto* b : { &en, &ru })
+    {
+        const bool sel = (b == &ru) == (lang == Help::Lang::ru);
+        b->setColour (TextButton::buttonColourId, sel ? t.accent : Colour (0xff26262b));
+        b->setColour (TextButton::textColourOffId, sel ? Colour (0xff111114) : Colour (0xffececf0));
+    }
+    repaint();
+}
+
+Rectangle<float> WelcomePrompt::card() const
+{
+    return getLocalBounds().toFloat().withSizeKeepingCentre (500.0f, 270.0f);
+}
+
+void WelcomePrompt::resized()
+{
+    const auto c = card().toNearestInt();
+    en.setBounds (c.getX() + 170, c.getY() + 128, 100, 28);
+    ru.setBounds (en.getRight() + 8, en.getY(), 100, 28);
+    yes.setBounds (c.getRight() - 24 - 150, c.getBottom() - 24 - 34, 150, 34);
+    notNow.setBounds (yes.getX() - 10 - 120, yes.getY(), 120, 34);
+    never.setBounds (c.getX() + 24, yes.getY(), 170, 34);
+}
+
+void WelcomePrompt::paint (Graphics& g)
+{
+    const auto& t = themeOf (*this);
+    g.fillAll (Colours::black.withAlpha (0.62f));
+    const auto c = card();
+    g.setColour (Colour (0xff141417));
+    g.fillRoundedRectangle (c, 14.0f);
+    g.setColour (t.accent.withAlpha (0.7f));
+    g.drawRoundedRectangle (c.reduced (0.5f), 14.0f, 1.2f);
+    Logo::draw (g, Rectangle<float> (c.getX() + 24.0f, c.getY() + 22.0f, 54.0f, 56.0f), FillType (t.lightBg ? t.accent : t.logo));
+    g.setColour (Colour (0xffececf0));
+    g.setFont (uiFont (19.0f, true));
+    g.drawText (Help::ui ("Hi! Want a quick tour of Dellayrium?", "Привет! Показать, как работает Dellayrium?", lang),
+                c.withTrimmedLeft (94.0f).withTrimmedRight (20.0f).withY (c.getY() + 28.0f).withHeight (26.0f), Justification::centredLeft);
+    g.setColour (Colour (0xffa5a5ad));
+    g.setFont (uiFont (13.0f));
+    g.drawText (Help::ui ("It takes a minute and shows what every knob does.", "Займёт пару минут: покажу, что делает каждая ручка.", lang),
+                c.withTrimmedLeft (94.0f).withTrimmedRight (20.0f).withY (c.getY() + 56.0f).withHeight (20.0f), Justification::centredLeft);
+    g.setColour (Colour (0xffececf0));
+    g.setFont (uiFont (13.0f, true));
+    g.drawText (Help::ui ("Help language", "Язык подсказок", lang), Rectangle<float> (c.getX() + 24.0f, c.getY() + 128.0f, 140.0f, 28.0f), Justification::centredLeft);
 }

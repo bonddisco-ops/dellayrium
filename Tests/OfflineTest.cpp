@@ -202,6 +202,17 @@ int main (int argc, char** argv)
             q.setTheme (theme.name);
             std::unique_ptr<DellayriumEditor> ed (dynamic_cast<DellayriumEditor*> (q.createEditor()));
             ed->setSize (DellayriumEditor::baseW, DellayriumEditor::baseH);
+            WelcomePrompt* welcome = nullptr;
+            TourOverlay* tour = nullptr;
+            Drawer* drawer = nullptr;
+            for (auto* c : ed->getChildren())
+            {
+                if (auto* w = dynamic_cast<WelcomePrompt*> (c)) welcome = w;
+                if (auto* t = dynamic_cast<TourOverlay*> (c)) tour = t;
+                if (auto* d = dynamic_cast<Drawer*> (c)) drawer = d;
+            }
+            const bool welcomeShown = welcome != nullptr && welcome->isVisible();
+            if (welcome != nullptr) welcome->setVisible (false);
             // feed some drums-ish noise so the analyzer, waterfall and sparks have something to show
             Random rnd (7);
             for (int frame = 0; frame < 70; ++frame)
@@ -239,6 +250,51 @@ int main (int argc, char** argv)
                 auto f2 = outDir.getChildFile ("ui-small.png");
                 f2.deleteFile();
                 if (auto os = f2.createOutputStream()) PNGImageFormat().writeImageToStream (small, *os);
+
+                // the size must survive closing and reopening the editor
+                ed.reset();
+                std::unique_ptr<AudioProcessorEditor> again (q.createEditor());
+                check (again->getWidth() == 1200 && again->getHeight() == 760,
+                       "window size remembered (" + String (again->getWidth()) + "x" + String (again->getHeight()) + ")");
+                again.reset();
+                ed.reset (dynamic_cast<DellayriumEditor*> (q.createEditor()));
+                for (auto* c : ed->getChildren())
+                {
+                    if (auto* w = dynamic_cast<WelcomePrompt*> (c)) welcome = w;
+                    if (auto* t = dynamic_cast<TourOverlay*> (c)) tour = t;
+                    if (auto* d = dynamic_cast<Drawer*> (c)) drawer = d;
+                }
+
+                // switching bands in the drawer must not write one band's mode into another
+                auto* m0 = q.apvts.getParameter (Params::id (0, "mode"));
+                auto* m2 = q.apvts.getParameter (Params::id (2, "mode"));
+                m0->setValueNotifyingHost (m0->convertTo0to1 (3.0f));
+                m2->setValueNotifyingHost (m2->convertTo0to1 (1.0f));
+                drawer->bindBand (0); drawer->bindBand (2); drawer->bindBand (0); drawer->bindBand (2);
+                MessageManager::getInstance()->runDispatchLoopUntil (100);
+                check (std::lround (m0->convertFrom0to1 (m0->getValue())) == 3 && std::lround (m2->convertFrom0to1 (m2->getValue())) == 1,
+                       "band modes kept when switching bands");
+
+                check (welcomeShown, "welcome prompt shown on first open");
+                welcome->setVisible (true);
+                welcome->toFront (false);
+                MessageManager::getInstance()->runDispatchLoopUntil (100);
+                auto wimg = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+                auto f3 = outDir.getChildFile ("ui-welcome.png");
+                f3.deleteFile();
+                if (auto os = f3.createOutputStream()) PNGImageFormat().writeImageToStream (wimg, *os);
+                welcome->setVisible (false);
+                tour->start (Help::Lang::ru);
+                for (int stepNo : { 2, 3, 7, 16 })
+                {
+                    tour->showStep (stepNo);
+                    MessageManager::getInstance()->runDispatchLoopUntil (400);
+                    auto timg = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+                    auto f4 = outDir.getChildFile ("ui-tour-" + String (stepNo) + ".png");
+                    f4.deleteFile();
+                    if (auto os = f4.createOutputStream()) PNGImageFormat().writeImageToStream (timg, *os);
+                }
+                tour->setVisible (false);
             }
         }
     }

@@ -3,21 +3,120 @@
 
 using namespace juce;
 
+namespace
+{
+    bool askedThisRun = false;
+    PropertiesFile::Options settingsOptions()
+    {
+        PropertiesFile::Options o;
+        o.applicationName = "Dellayrium";
+        o.folderName = "Primal Rage Lab";
+        o.filenameSuffix = ".settings";
+        o.osxLibrarySubFolder = "Application Support";
+        o.millisecondsBeforeSaving = 0;
+        return o;
+    }
+}
+
+String DellayriumEditor::loadSetting (const String& key, const String& fallback)
+{
+    PropertiesFile f (settingsOptions());
+    return f.getValue (key, fallback);
+}
+
+void DellayriumEditor::saveSetting (const String& key, const String& value)
+{
+    PropertiesFile f (settingsOptions());
+    f.setValue (key, value);
+    f.saveIfNeeded();
+}
+
 DellayriumEditor::DellayriumEditor (DellayriumProcessor& p) : AudioProcessorEditor (&p), proc (p)
 {
-    look.setTheme (Theme::byName (proc.getTheme()));
+    // theme, help and language are remembered for every new instance
+    const auto themeName = loadSetting ("theme", proc.getTheme());
+    proc.setTheme (themeName);
+    look.setTheme (Theme::byName (themeName));
+    helpOn = loadSetting ("help", "on") != "off";
+    lang = loadSetting ("helpLang", "en") == "ru" ? Help::Lang::ru : Help::Lang::en;
+
     addAndMakeVisible (inCol);
     addAndMakeVisible (outCol);
     addAndMakeVisible (presetBar);
     addAndMakeVisible (screen);
     addAndMakeVisible (drawer);
+    addChildComponent (tour);
+    addChildComponent (welcome);
     setLookAndFeel (&look);
 
+    tour.resolveTarget = [this] (const String& n) { return tourTarget (n); };
+    tour.onStep = [this] (const String& n)
+    {
+        if (n == "drawer" || n == "engine" || n == "time" || n == "mode" || n == "duck" || n == "drive" || n == "space" || n == "mix")
+            drawer.setOpen (true);
+    };
+    tour.onFinish = [] { saveSetting ("tour", "never"); };
+    welcome.onLanguage = [this] (Help::Lang l)
+    {
+        lang = l;
+        saveSetting ("helpLang", l == Help::Lang::ru ? "ru" : "en");
+        applyHelp();
+    };
+    welcome.onChoice = [this] (int choice)
+    {
+        welcome.setVisible (false);
+        if (choice == 0) tour.start (lang);
+        else if (choice == 2) saveSetting ("tour", "never");
+    };
+    welcome.setLang (lang);
+    applyHelp();
+
+    // size: the project remembers its own, otherwise the last one used anywhere.
+    // Read it before setResizeLimits, which resizes the editor (and would overwrite the saved size).
+    int w = (int) proc.apvts.state.getProperty ("uiW", loadSetting ("w", String (baseW)).getIntValue());
+    int h = (int) proc.apvts.state.getProperty ("uiH", loadSetting ("h", String (baseH)).getIntValue());
     setResizable (true, true);
     setResizeLimits (1100, 700, 3400, 2000);
-    const int w = (int) proc.apvts.state.getProperty ("uiW", baseW);
-    const int h = (int) proc.apvts.state.getProperty ("uiH", baseH);
+    ready = true;
     setSize (jlimit (1100, 3400, w), jlimit (700, 2000, h));
+
+    if (loadSetting ("tour", "") != "never" && ! askedThisRun)
+    {
+        askedThisRun = true;
+        welcome.setVisible (true);
+        welcome.toFront (false);
+    }
+}
+
+void DellayriumEditor::applyHelp()
+{
+    if (helpOn && tooltipWindow == nullptr)
+        tooltipWindow = std::make_unique<TooltipWindow> (this, 700);
+    else if (! helpOn)
+        tooltipWindow.reset();
+    auto tip = [this] (const char* k) { return helpOn ? Help::tip (k, lang) : String(); };
+    inCol.knob.slider.setTooltip (tip ("dry"));
+    outCol.knob.slider.setTooltip (tip ("wet"));
+    inCol.setTooltip (tip ("inMeter"));
+    outCol.setTooltip (tip ("outMeter"));
+    presetBar.setTooltip (tip ("presets"));
+    screen.setTooltip (tip ("screen"));
+    drawer.setHelp (helpOn, lang);
+}
+
+Rectangle<float> DellayriumEditor::tourTarget (const String& n)
+{
+    if (n.isEmpty()) return {};
+    if (n == "inCol") return inCol.getBounds().toFloat();
+    if (n == "outCol") return outCol.getBounds().toFloat();
+    if (n == "presets") return presetBar.getBounds().toFloat();
+    if (n == "gear") return gearArea.toFloat();
+    if (n == "drawer") return drawer.getBounds().toFloat().withTrimmedTop ((float) drawer.getHeight() - drawer.visibleHeight()).withTrimmedBottom (8.0f);
+    const auto sr = screen.tourRect (n);
+    if (! sr.isEmpty()) return sr + screen.getPosition().toFloat();
+    const auto dr = drawer.tourRect (n);
+    if (! dr.isEmpty()) return (dr + drawer.getPosition()).toFloat();
+    return {};
 }
 
 DellayriumEditor::~DellayriumEditor() { setLookAndFeel (nullptr); }
@@ -35,6 +134,7 @@ void DellayriumEditor::selectBand (int band, bool openDrawer)
 void DellayriumEditor::applyTheme (const String& name)
 {
     proc.setTheme (name);
+    saveSetting ("theme", name);
     look.setTheme (Theme::byName (name));
     background = {};
     sendLookAndFeelChange();
@@ -171,17 +271,28 @@ void DellayriumEditor::paintOverChildren (Graphics& g)
 
 void DellayriumEditor::resized()
 {
-    proc.apvts.state.setProperty ("uiW", getWidth(), nullptr);
-    proc.apvts.state.setProperty ("uiH", getHeight(), nullptr);
     const int W = getWidth(), H = getHeight();
+    if (ready)
+    {
+        proc.apvts.state.setProperty ("uiW", W, nullptr);
+        proc.apvts.state.setProperty ("uiH", H, nullptr);
+        saveSetting ("w", String (W));
+        saveSetting ("h", String (H));
+    }
     inCol.setBounds (10, 10, 84, H - 20);
     outCol.setBounds (W - 94, 10, 84, H - 20);
     logoArea = { 104, 10, 62, 66 };
-    gearArea = { W - 160, 20, 46, 38 };
-    const int pw = 380;
-    presetBar.setBounds (jmax (logoArea.getRight() + 440, W / 2 - pw / 2), 22, pw, 34);
+    gearArea = { W - 94 - 12 - 46, 20, 46, 38 };
+    // the preset bar sits between the title and the gear, centred on the window when there is room
+    const int left = logoArea.getRight() + 270, right = gearArea.getX() - 16;
+    const int pw = jmin (380, right - left);
+    const int px = jlimit (left, right - pw, W / 2 - pw / 2);
+    presetBar.setBounds (px, 22, pw, 34);
     screen.setBounds (106, 84, W - 212, H - 96);
+    tour.setBounds (getLocalBounds());
+    welcome.setBounds (getLocalBounds());
     drawerMoved();
+    if (tour.isVisible()) tour.resized();
 }
 
 void DellayriumEditor::drawerMoved()
@@ -201,11 +312,18 @@ void DellayriumEditor::mouseDown (const MouseEvent& e)
 
 void DellayriumEditor::showGearMenu()
 {
-    PopupMenu m;
-    m.addSectionHeader ("Theme");
+    PopupMenu themes, help, langs, m;
     for (const auto& t : Theme::all())
-        m.addItem (t.name, true, t.name == look.theme().name, [this, n = t.name] { applyTheme (n); });
+        themes.addItem (t.name, true, t.name == look.theme().name, [this, n = t.name] { applyTheme (n); });
+    help.addItem ("On", true, helpOn, [this] { helpOn = true; saveSetting ("help", "on"); applyHelp(); });
+    help.addItem ("Off", true, ! helpOn, [this] { helpOn = false; saveSetting ("help", "off"); applyHelp(); });
+    langs.addItem ("English", true, lang == Help::Lang::en, [this] { lang = Help::Lang::en; saveSetting ("helpLang", "en"); welcome.setLang (lang); applyHelp(); });
+    langs.addItem (String::fromUTF8 ("Русский"), true, lang == Help::Lang::ru, [this] { lang = Help::Lang::ru; saveSetting ("helpLang", "ru"); welcome.setLang (lang); applyHelp(); });
+    m.addSubMenu ("Theme", themes);
+    m.addSubMenu ("Help", help);
+    m.addSubMenu ("Help language", langs);
     m.addSeparator();
+    m.addItem ("Start tour", [this] { tour.start (lang); });
     m.addItem ("Reset window size", [this] { setSize (baseW, baseH); });
     m.addSeparator();
     m.addItem (String ("Dellayrium ") + JucePlugin_VersionString + " by Primal Rage Lab", false, false, nullptr);

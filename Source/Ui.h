@@ -2,6 +2,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "PluginProcessor.h"
 #include "Theme.h"
+#include "Help.h"
 
 juce::Font uiFont (float height, bool bold = false, float kerning = 0.0f);
 inline const juce::Colour kInk (0xffececf0), kMute (0xffa5a5ad), kWidget (0xff1b1b1f);
@@ -71,7 +72,7 @@ private:
 //==============================================================================
 class DellayriumEditor;
 
-class Screen : public juce::Component, private juce::Timer
+class Screen : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
 {
 public:
     Screen (DellayriumProcessor&, DellayriumEditor&);
@@ -89,6 +90,7 @@ public:
     float bottomReserve = 0.0f;           // space taken by the drawer
     bool analyzerOn = true;
     void renderOnce();                    // test helper: run the analyzer without waiting for the timer
+    juce::Rectangle<float> tourRect (const juce::String& name) const;   // parts of the screen for the tour
 
 private:
     DellayriumProcessor& proc;
@@ -109,8 +111,8 @@ private:
     juce::Random rnd;
 
     int hover = -1, dragging = -1;
-    bool dragMoved = false;
-    juce::Point<float> dragStart;
+    bool dragMoved = false, soloDrag = false, soloWasOn = false;
+    juce::Point<float> dragStart, grabOffset;
 
     void timerCallback() override;
     void pullAnalyzer();
@@ -141,6 +143,8 @@ public:
     void resized() override;
     void mouseDown (const juce::MouseEvent&) override;
     void bindBand (int band);
+    void setHelp (bool on, Help::Lang);
+    juce::Rectangle<int> tourRect (const juce::String& name) const;
     void lookAndFeelChanged() override { updateColours(); }
     void parentHierarchyChanged() override { updateColours(); }
     void setOpen (bool);
@@ -164,7 +168,8 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> aTime, aMs, aFb, aAmt, aDuck, aDrive, aSize, aDiff, aMix;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> aMode, aDtype;
     std::unique_ptr<juce::ParameterAttachment> onAttach;
-    bool bandEnabled = true;
+    bool bandEnabled = true, helpOn = true;
+    Help::Lang lang = Help::Lang::en;
 
     void timerCallback() override;
     void updateColours();
@@ -174,7 +179,7 @@ private:
 };
 
 //==============================================================================
-class MeterColumn : public juce::Component, private juce::Timer
+class MeterColumn : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
 {
 public:
     MeterColumn (DellayriumProcessor&, bool isOutput);
@@ -190,7 +195,7 @@ private:
 };
 
 //==============================================================================
-class PresetBar : public juce::Component, private juce::Timer
+class PresetBar : public juce::Component, public juce::SettableTooltipClient, private juce::Timer
 {
 public:
     explicit PresetBar (DellayriumProcessor&);
@@ -202,4 +207,41 @@ private:
     void showMenu();
     void askForName (const juce::String& title, const juce::String& initial, std::function<void (const juce::String&)> onOk);
     void timerCallback() override { repaint(); }
+};
+
+//==============================================================================
+// Step-by-step tour: dims everything except the part being explained
+class TourOverlay : public juce::Component
+{
+public:
+    TourOverlay();
+    void start (Help::Lang);
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void mouseDown (const juce::MouseEvent&) override {}
+    std::function<juce::Rectangle<float> (const juce::String&)> resolveTarget;
+    std::function<void (const juce::String&)> onStep;
+    std::function<void()> onFinish;
+    void showStep (int);
+private:
+    juce::Rectangle<float> calloutArea() const;
+    juce::TextButton back, next, skip;
+    int step = 0;
+    Help::Lang lang = Help::Lang::en;
+};
+
+// First-run question: show the tour?
+class WelcomePrompt : public juce::Component
+{
+public:
+    WelcomePrompt();
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void setLang (Help::Lang);
+    std::function<void (int)> onChoice;            // 0 yes, 1 not now, 2 never
+    std::function<void (Help::Lang)> onLanguage;
+private:
+    juce::Rectangle<float> card() const;
+    juce::TextButton yes, notNow, never, en { "English" }, ru;
+    Help::Lang lang = Help::Lang::en;
 };
