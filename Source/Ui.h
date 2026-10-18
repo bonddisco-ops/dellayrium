@@ -32,6 +32,15 @@ private:
 };
 
 const Theme& themeOf (const juce::Component&);
+
+// The metal look shared by the Primal Rage Lab line: glass jewel lamps, raised keys, recesses milled into the panel
+namespace Metal
+{
+    void jewel (juce::Graphics&, juce::Point<float> centre, float radius, bool on, juce::Colour colour);
+    void key (juce::Graphics&, juce::Rectangle<float>, bool on, juce::Colour onColour, float corner = 6.0f, bool hover = false);
+    void milled (juce::Graphics&, juce::Rectangle<float>, float corner, const Theme&);
+    void screw (juce::Graphics&, juce::Point<float> centre, float angle);
+}
 juce::Colour accentOf (const juce::Component&);   // the selected band's colour when there is one
 
 //==============================================================================
@@ -101,6 +110,7 @@ public:
     bool analyzerOn = true;
     void renderOnce();                    // test helper: run the analyzer without waiting for the timer
     juce::Rectangle<float> tourRect (const juce::String& name) const;   // parts of the screen for the tour
+    void lookAndFeelChanged() override { glassCache = {}; repaint(); }
 
 private:
     DellayriumProcessor& proc;
@@ -170,6 +180,7 @@ private:
     int band = 0;
     bool open = true;
     float openness = 1.0f;
+    juce::Image plateCache;
 
     Knob time, timeMs, feedback, modeKnob, duck, drive, size, diffuse, mix;
     MiniParam duckAtk, duckRel;

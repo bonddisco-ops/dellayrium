@@ -35,6 +35,9 @@ private:
     juce::uint32 toastUntil = 0;
     bool ready = false, helpOn = true;
     int seenPresetLoads = 0;
+    bool gearHover = false;
+    void mouseMove (const juce::MouseEvent&) override;
+    void mouseExit (const juce::MouseEvent&) override { if (gearHover) { gearHover = false; repaint (gearArea); } }
     void timerCallback() override;
     void pickLiveBand();
     Help::Lang lang = Help::Lang::en;

@@ -209,40 +209,47 @@ void DellayriumEditor::buildBackground()
         }
         return;
     }
-    // wet asphalt: coarse blotches, fine grain and a few bright specks
+    // brushed metal: light from above, fine grain, horizontal brushing, a few specks
     Random rnd (1234);
-    constexpr int gw = 30, gh = 22;
-    float coarse[gw * gh];
-    for (auto& v : coarse) v = rnd.nextFloat() * 14.0f - 7.0f;
     {
-        Image::BitmapData bd (background, Image::BitmapData::writeOnly);
-        const float br = t.bg.getFloatRed() * 255.0f, bgc = t.bg.getFloatGreen() * 255.0f, bb = t.bg.getFloatBlue() * 255.0f;
-        auto ch = [] (float f) { return (uint8) jlimit (0, 255, roundToInt (f)); };
+        ColourGradient body (t.bg.brighter (t.lightBg ? 0.08f : 0.28f), 0.0f, 0.0f, t.bg.darker (0.45f), 0.0f, (float) H, false);
+        body.addColour (0.35, t.bg);
+        g.setGradientFill (body);
+        g.fillAll();
+    }
+    {
+        Image::BitmapData bd (background, Image::BitmapData::readWrite);
         for (int y = 0; y < H; ++y)
-        {
-            const float fy = (float) y / (float) (H - 1) * (gh - 1);
-            const int y0 = jmin (gh - 2, (int) fy);
-            const float ty = fy - (float) y0;
             for (int x = 0; x < W; ++x)
             {
-                const float fx = (float) x / (float) (W - 1) * (gw - 1);
-                const int x0 = jmin (gw - 2, (int) fx);
-                const float tx = fx - (float) x0;
-                const float c = coarse[y0 * gw + x0] * (1 - tx) * (1 - ty) + coarse[y0 * gw + x0 + 1] * tx * (1 - ty)
-                              + coarse[(y0 + 1) * gw + x0] * (1 - tx) * ty + coarse[(y0 + 1) * gw + x0 + 1] * tx * ty;
-                const float nz = c + (rnd.nextFloat() - 0.5f) * 30.0f;
-                if (rnd.nextFloat() < 0.004f) bd.setPixelColour (x, y, t.bg.interpolatedWith (t.speck, 0.4f + rnd.nextFloat() * 0.6f));
-                else bd.setPixelColour (x, y, Colour (ch (br + nz), ch (bgc + nz), ch (bb + nz * 1.1f)));
+                const auto c = bd.getPixelColour (x, y);
+                const int n = rnd.nextInt (t.lightBg ? 17 : 13) - (t.lightBg ? 8 : 6);
+                auto ch = [n] (uint8 v) { return (uint8) jlimit (0, 255, (int) v + n); };
+                bd.setPixelColour (x, y, Colour (ch (c.getRed()), ch (c.getGreen()), ch (c.getBlue())));
             }
-        }
     }
-    ColourGradient sheen (Colour (0xffb4c4dc).withAlpha (t.lightBg ? 0.10f : 0.06f), (float) W * 0.7f, (float) H * 0.12f,
-                          Colours::transparentWhite, (float) W * 1.05f, (float) H * 0.12f, true);
-    g.setGradientFill (sheen);
-    g.fillEllipse ((float) W * 0.35f, 0.0f, (float) W * 0.7f, (float) H * 0.3f);
+    const int strokes = W * H / 600;
+    for (int i = 0; i < strokes; ++i)
+    {
+        const float y = rnd.nextFloat() * (float) H, x0 = rnd.nextFloat() * (float) W;
+        g.setColour ((rnd.nextBool() ? Colours::white : Colours::black).withAlpha (t.lightBg ? 0.05f : 0.045f));
+        g.drawLine (x0, y, x0 + 60.0f + rnd.nextFloat() * 320.0f, y, 0.4f + rnd.nextFloat() * 1.0f);
+    }
+    if (! t.lightBg)
+        for (int i = 0; i < W * H / 1800; ++i)
+        {
+            g.setColour (t.speck.withAlpha (rnd.nextFloat() * 0.25f));
+            g.fillRect ((float) rnd.nextInt (W), (float) rnd.nextInt (H), 1.5f, 1.5f);
+        }
+    ColourGradient key (Colours::white.withAlpha (t.lightBg ? 0.30f : 0.11f), (float) W * 0.3f, -160.0f,
+                        Colours::transparentWhite, (float) W * 0.3f, -160.0f + (float) H * 1.1f, true);
+    g.setGradientFill (key);
+    g.fillRect (0, 0, W, H);
     ColourGradient vig (Colours::transparentBlack, (float) W * 0.5f, (float) H * 0.45f, t.vignette, 0.0f, 0.0f, true);
     g.setGradientFill (vig);
     g.fillRect (0, 0, W, H);
+    g.setColour (Colours::white.withAlpha (0.10f));
+    g.fillRect (0, 0, W, 1);
 }
 
 void DellayriumEditor::paint (Graphics& g)
@@ -261,8 +268,10 @@ void DellayriumEditor::paint (Graphics& g)
     }
     else
         Logo::draw (g, la, FillType (t.logo));
-    g.setColour (t.lightBg ? t.ink : Colours::white);
     g.setFont (uiFont (36.0f, true, 0.08f));
+    g.setColour (t.lightBg ? Colours::white.withAlpha (0.5f) : Colours::black.withAlpha (0.7f));
+    g.drawText ("DELLAYRIUM", logoArea.getRight() + 10, 16, 420, 40, Justification::centredLeft);   // stamped into the plate
+    g.setColour (t.lightBg ? t.ink : Colours::white);
     g.drawText ("DELLAYRIUM", logoArea.getRight() + 10, 14, 420, 40, Justification::centredLeft);
     g.setColour (t.mute);
     g.setFont (uiFont (12.0f, true, 0.45f));
@@ -270,11 +279,8 @@ void DellayriumEditor::paint (Graphics& g)
 
     // gear
     const auto gr = gearArea.toFloat();
-    g.setColour (kWidget);
-    g.fillRoundedRectangle (gr, 7.0f);
-    g.setColour (Colours::white.withAlpha (0.08f));
-    g.drawRoundedRectangle (gr.reduced (0.5f), 7.0f, 1.0f);
-    g.setColour (kInk);
+    Metal::key (g, gr.reduced (0.5f, 1.5f), false, t.accent, 7.0f, gearHover);
+    g.setColour (kInk.withAlpha (gearHover ? 1.0f : 0.85f));
     g.drawEllipse (Rectangle<float> (12, 12).withCentre (gr.getCentre()), 2.0f);
     for (int i = 0; i < 8; ++i)
     {
@@ -333,6 +339,16 @@ void DellayriumEditor::drawerMoved()
     drawer.setBounds (104, H - (int) vis - 8, W - 208, Drawer::fullHeight + 8);
     screen.bottomReserve = vis - 4.0f;
     screen.repaint();
+}
+
+void DellayriumEditor::mouseMove (const MouseEvent& e)
+{
+    const bool h = gearArea.contains (e.getPosition());
+    if (h != gearHover)
+    {
+        gearHover = h;
+        repaint (gearArea.expanded (4));
+    }
 }
 
 void DellayriumEditor::mouseDown (const MouseEvent& e)

@@ -15,15 +15,24 @@ struct Theme
         return accentDim.interpolatedWith (accentHi, t).withAlpha ((0.45f + 0.55f * t) * alpha);
     }
 
+    // compressor marks on the screen: a colour that stands out from the accent of each theme
+    juce::Colour comp() const
+    {
+        if (name == "Mango")       return juce::Colour (0xffb04cff);
+        if (name == "Ultraviolet") return juce::Colour (0xff4cf0c0);
+        if (name == "Luxe")        return juce::Colour (0xfffff2c8);
+        return juce::Colour (0xffffd84a);   // yellow
+    }
+
     static const std::vector<Theme>& all()
     {
         using C = juce::Colour;
         static const std::vector<Theme> themes {
-            { "Asphalt", false, false, C (24, 25, 28), C (150, 150, 158), C (0xffececf0), C (0xffa5a5ad),
+            { "Asphalt", false, false, C (29, 30, 35), C (150, 150, 158), C (0xffececf0), C (0xffa5a5ad),
               C (0xffff73b2), C (0xffff7db9), C (0xff965f7d), C (0xffff73b2),
               C (0x73000000), C (0x40000000), C (0x0fffffff) },
             { "Mango", false, true, C (246, 168, 32), C (196, 110, 12), C (0xff2b1a00), C (0xff6b4a10),
-              C (0xff0fb5c9), C (0xff5ae1f0), C (0xff468c9b), C (0xff5a3205),
+              C (0xff0fb5c9), C (0xff5ae1f0), C (0xff468c9b), C (0xff0fb5c9),
               C ((juce::uint8) 120, 50, 0, 0.30f), C ((juce::uint8) 110, 50, 0, 0.13f), C ((juce::uint8) 80, 40, 0, 0.18f) },
             { "Rage", false, false, C (16, 12, 12), C (96, 58, 58), C (0xfff2e6e2), C (0xffb09a96),
               C (0xffe8263a), C (0xffff4655), C (0xff822d34), C (0xffff3045),
